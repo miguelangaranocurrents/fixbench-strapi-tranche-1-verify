@@ -604,8 +604,13 @@ test.describe('Edit view', () => {
     );
     await expect(page.getByLabel('name')).toHaveValue('Nike Mens 23/24 Away Stadium Jersey');
 
-    const label = page.locator('label').filter({ hasText: 'name' }).first();
-    await label.locator('svg').hover();
+    const globe = page
+      .locator('span')
+      .filter({ has: page.getByText('This value is unique for the selected locale') })
+      .first()
+      .locator('svg')
+      .first();
+    await globe.hover();
     await expect(
       page.getByRole('tooltip', { name: 'This value is unique for the selected locale' })
     ).toBeVisible();

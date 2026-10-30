@@ -46,7 +46,7 @@ jobs:
           app-id: ${{ secrets.DRAFT_RELEASE_APP_ID }}
           private-key: ${{ secrets.DRAFT_RELEASE_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0 # tags and full first-parent history are both required

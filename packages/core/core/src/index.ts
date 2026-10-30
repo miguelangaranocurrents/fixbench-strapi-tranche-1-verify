@@ -1,0 +1,55 @@
+import * as qs from 'qs';
+import type { Core } from '@strapi/types';
+
+import Strapi, { type StrapiOptions } from './Strapi';
+import { destroyOnSignal, resolveWorkingDirectories, createUpdateNotifier } from './utils';
+import type {
+  ContextDelegatedResponseErrorMethods,
+  ContextDelegatedResponseSuccessMethods,
+} from './services/server/koa-methods';
+
+export { default as compileStrapi } from './compile';
+export * as factories from './factories';
+export * as ai from './ai';
+
+export const createStrapi = (options: Partial<StrapiOptions> = {}): Core.Strapi => {
+  const strapi = new Strapi({
+    ...options,
+    ...resolveWorkingDirectories(options),
+  });
+
+  destroyOnSignal(strapi);
+  createUpdateNotifier(strapi);
+
+  // TODO: deprecate and remove in next major
+  global.strapi = strapi;
+
+  return strapi;
+};
+
+// Augment Koa query type based on Strapi query middleware
+
+declare module 'koa' {
+  type ParsedQuery = ReturnType<typeof qs.parse>;
+
+  export interface BaseRequest {
+    _querycache?: ParsedQuery;
+
+    get query(): ParsedQuery;
+    set query(obj: any);
+  }
+
+  export interface BaseContext {
+    _querycache?: ParsedQuery;
+
+    get query(): ParsedQuery;
+    set query(obj: any);
+  }
+
+  // Keep Koa's context and response types in sync with the helpers registered at runtime in `koa.ts`.
+  // `BaseResponse` and `BaseContext` both extend `DefaultContextDelegatedResponse`, so augmenting it
+  // once covers `ctx.*` and `ctx.response.*`.
+  export interface DefaultContextDelegatedResponse
+    extends ContextDelegatedResponseErrorMethods,
+      ContextDelegatedResponseSuccessMethods {}
+}

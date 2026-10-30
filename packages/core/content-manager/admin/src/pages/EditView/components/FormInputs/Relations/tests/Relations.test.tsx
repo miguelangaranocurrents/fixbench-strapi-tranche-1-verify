@@ -1,0 +1,671 @@
+import * as React from 'react';
+
+import { Form } from '@strapi/admin/strapi-admin';
+import {
+  RenderOptions,
+  fireEvent,
+  render as renderRTL,
+  screen,
+  server,
+  waitFor,
+} from '@tests/utils';
+import { http, HttpResponse } from 'msw';
+import { Route, Routes, useLocation } from 'react-router-dom';
+
+import { mockData } from '../../../../../../../tests/mockData';
+import { ComponentProvider } from '../../ComponentContext';
+import { RelationsInput, RelationsFieldProps } from '../Relations';
+
+const render = (
+  {
+    initialEntries,
+    initialValues,
+    ...props
+  }: Partial<RelationsFieldProps> &
+    Pick<RenderOptions, 'initialEntries'> & { initialValues?: Record<string, unknown> } = {
+    initialEntries: [],
+  }
+) =>
+  renderRTL(
+    <RelationsInput
+      attribute={{
+        type: 'relation',
+        relation: 'manyToMany',
+        target: 'api::category.category',
+        inversedBy: 'relation_locales',
+        // @ts-expect-error – this is what the API returns
+        targetModel: 'api::category.category',
+        relationType: 'manyToMany',
+      }}
+      label="relations"
+      mainField={{ name: 'name', type: 'string' }}
+      name="relations"
+      type="relation"
+      {...props}
+    />,
+    {
+      renderOptions: {
+        wrapper: ({ children }) => (
+          <Routes>
+            <Route
+              path="/content-manager/:collectionType/:slug/:id"
+              element={
+                initialValues ? (
+                  <Form method="POST" onSubmit={jest.fn()} initialValues={initialValues}>
+                    {children}
+                  </Form>
+                ) : (
+                  children
+                )
+              }
+            />
+          </Routes>
+        ),
+      },
+      initialEntries: initialEntries ?? [
+        '/content-manager/collection-types/api::address.address/12345',
+      ],
+    }
+  );
+
+describe('Relations', () => {
+  const renderRelationNavigation = (relation: {
+    documentId: string;
+    locale: string | null;
+    name: string;
+  }) => {
+    server.use(
+      http.get<{ model: string; id: string; fieldName: string }>(
+        '/content-manager/relations/:model/:id/:fieldName',
+        () =>
+          HttpResponse.json({
+            results: [
+              {
+                id: 1,
+                ...relation,
+                status: 'published',
+              },
+            ],
+            pagination: { page: 1, pageCount: 1, pageSize: 10, total: 1 },
+          })
+      )
+    );
+
+    const LocationProbe = () => {
+      const location = useLocation();
+
+      return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+    };
+
+    return renderRTL(
+      <RelationsInput
+        attribute={{
+          type: 'relation',
+          relation: 'manyToMany',
+          target: 'api::category.category',
+          inversedBy: 'relation_locales',
+          // @ts-expect-error – this is what the API returns
+          targetModel: 'api::category.category',
+          relationType: 'manyToMany',
+        }}
+        label="relations"
+        mainField={{ name: 'name', type: 'string' }}
+        model="api::address.address"
+        name="relations"
+        type="relation"
+        isRelatedToCurrentDocument
+        onChange={jest.fn()}
+      />,
+      {
+        renderOptions: {
+          wrapper: ({ children }) => (
+            <Routes>
+              <Route
+                path="/content-manager/:collectionType/:slug/:id"
+                element={
+                  <>
+                    <LocationProbe />
+                    {children}
+                  </>
+                }
+              />
+            </Routes>
+          ),
+        },
+        initialEntries: [
+          '/content-manager/collection-types/api::address.address/12345?plugins[i18n][locale]=en',
+        ],
+      }
+    );
+  };
+
+  /**
+   * TODO: for some reason, we're not getting any data from MSW.
+   */
+  it.skip('should by default render just the combobox', async () => {
+    const { user } = render({
+      initialEntries: ['/content-manager/collection-types/api::address.address/create'],
+    });
+
+    expect(screen.getByLabelText('relations')).toBe(screen.getByRole('combobox'));
+
+    await user.click(screen.getByRole('combobox'));
+
+    expect(await screen.findAllByRole('option')).toHaveLength(3);
+  });
+
+  it('should render the relations list when there is data from the API', async () => {
+    render({
+      initialEntries: ['/content-manager/collection-types/api::address.address/12345'],
+    });
+
+    // Wait for the loading state to finish
+    await waitFor(() => {
+      expect(screen.queryByText('Relations are loading')).not.toBeInTheDocument();
+    });
+
+    // Wait for the combobox to be rendered with the correct label
+    await screen.findByLabelText(/relations/);
+
+    // Wait for the list items to be rendered
+    const listItems = await screen.findAllByRole('listitem');
+    expect(listItems).toHaveLength(3);
+
+    // Wait for the combobox to be updated with the count
+    await screen.findByLabelText(/relations \(3\)/);
+
+    // Check for the relation buttons
+    expect(screen.getByRole('button', { name: 'Relation entity 1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Relation entity 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Relation entity 3' })).toBeInTheDocument();
+  });
+
+  it('renders localized fallback labels for fill-from-locale connect items', async () => {
+    render({
+      initialValues: {
+        relations: {
+          connect: [
+            {
+              id: 101,
+              documentId: 'internal-empty-key',
+              locale: 'fr',
+              name: '',
+              label: '',
+              __temp_key__: 'a0',
+            },
+            {
+              id: 102,
+              documentId: 'internal-null-key',
+              locale: 'fr',
+              name: null,
+              label: 'internal-null-key',
+              __temp_key__: 'a1',
+            },
+          ],
+          disconnect: [],
+        },
+      },
+    });
+
+    expect(await screen.findAllByRole('button', { name: 'Untitled' })).toHaveLength(2);
+    expect(screen.queryByText('internal-empty-key')).not.toBeInTheDocument();
+    expect(screen.queryByText('internal-null-key')).not.toBeInTheDocument();
+  });
+
+  it('should be disabled when the prop is passed', async () => {
+    render({ disabled: true });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    });
+
+    expect(screen.getByRole('combobox')).toBeDisabled();
+  });
+
+  it('should render a hint when the prop is passed', async () => {
+    render({ hint: 'This is a hint' });
+
+    // Wait for the combobox to be rendered with the correct label
+    await waitFor(() => {
+      expect(screen.getByLabelText(/relations/)).toBeInTheDocument();
+    });
+
+    // Wait for the loading state to finish
+    await waitFor(() => {
+      expect(screen.queryByText('Relations are loading')).not.toBeInTheDocument();
+    });
+
+    // Wait for the list items to be rendered
+    await waitFor(() => {
+      expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    });
+
+    expect(screen.getByText('This is a hint')).toBeInTheDocument();
+  });
+
+  it.todo(
+    'should show the load more button when the is a pageCount greater than 1 of the fetched data and fetch more data when pressed'
+  );
+
+  it.todo('should connect a relation');
+
+  it.todo('should disconnect a relation');
+
+  describe('relation targeting a Single Type', () => {
+    const mockCreatePermission = (subject: string) =>
+      http.get('/admin/users/me/permissions', () =>
+        HttpResponse.json({
+          data: [
+            {
+              id: 1,
+              action: 'plugin::content-manager.explorer.create',
+              subject,
+              properties: {},
+              conditions: [],
+            },
+          ],
+        })
+      );
+
+    // Reuses `api::category.category` as the relation's target (instead of an
+    // unrelated single type) because it's the target of the `categories` attribute
+    // already on the default fixture's `api::address.address` schema — the content
+    // type the test document is rendered as. Matching it keeps `isRelatedToCurrentDocument`
+    // true so the relation search actually runs and returns options, rather than the
+    // combobox silently rendering nothing regardless of the fix under test.
+    const singleTypeAttribute = {
+      type: 'relation',
+      relation: 'manyToMany',
+      target: 'api::category.category',
+      inversedBy: 'addresses',
+      targetModel: 'api::category.category',
+      relationType: 'manyToMany',
+    } as const;
+
+    // `api::category.category` is referenced as a relation target throughout the shared
+    // fixture (including by `api::address.address`'s own `categories` attribute above),
+    // but isn't itself defined as a content type there — so it has to be added, not just
+    // have its `kind` overridden. It's appended to the default fixture rather than
+    // replacing the whole list, so the current document's own schema
+    // (api::address.address) stays resolvable and relation search results still load.
+    const mockCategoryContentTypeKind = (kind: 'singleType' | 'collectionType') =>
+      http.get('/content-manager/init', () =>
+        HttpResponse.json({
+          data: {
+            components: mockData.contentManager.components,
+            contentTypes: [
+              ...mockData.contentManager.contentTypes,
+              {
+                uid: 'api::category.category',
+                kind,
+                isDisplayed: true,
+                apiID: 'category',
+                info: { displayName: 'Category' },
+                options: {},
+                attributes: {},
+              },
+            ],
+          },
+        })
+      );
+
+    // The shared fixture's generic `/content-manager/:collectionType/:uid/:id` document
+    // handler also matches `/content-manager/relations/:model/:fieldName` (same segment
+    // count) and is registered first, so it wins and 404s the relation search in these
+    // tests. `server.use` handlers take priority over the base fixture, so re-declaring
+    // this one here restores the intended 200 response without touching the shared file.
+    const mockSearchRelations = () =>
+      http.get('/content-manager/relations/:model/:fieldName', () =>
+        HttpResponse.json({
+          results: [
+            {
+              id: 1,
+              documentId: 'apples',
+              locale: 'en',
+              status: 'draft',
+              name: 'Relation entity 1',
+            },
+          ],
+          pagination: { page: 1, pageCount: 1, total: 1 },
+        })
+      );
+
+    it('hides the "Create a relation" option even when the user can create', async () => {
+      server.use(
+        mockCategoryContentTypeKind('singleType'),
+        mockCreatePermission('api::category.category'),
+        mockSearchRelations()
+      );
+
+      const { user } = render({ attribute: singleTypeAttribute });
+
+      await waitFor(() => {
+        expect(screen.queryByText('Relations are loading')).not.toBeInTheDocument();
+      });
+
+      await user.click(await screen.findByRole('combobox', { name: /relations/i }));
+
+      // A regular option still renders, so the missing "Create a relation" option isn't
+      // just a symptom of the combobox rendering no options at all. Its accessible name
+      // also includes the trailing status badge text (e.g. "Draft"), hence the regex.
+      expect(await screen.findByRole('option', { name: /Relation entity 1/ })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Create a relation' })).not.toBeInTheDocument();
+    });
+
+    it('does not disable "Create a relation" for a Collection Type target when the user can create', async () => {
+      server.use(
+        mockCategoryContentTypeKind('collectionType'),
+        mockCreatePermission('api::category.category')
+      );
+
+      const { user } = render({});
+
+      await waitFor(() => {
+        expect(screen.queryByText('Relations are loading')).not.toBeInTheDocument();
+      });
+
+      await user.click(await screen.findByRole('combobox', { name: /relations/i }));
+
+      expect(await screen.findByRole('option', { name: 'Create a relation' })).not.toHaveAttribute(
+        'aria-disabled',
+        'true'
+      );
+    });
+  });
+
+  it('should search nested component relations using the component id', async () => {
+    const relationSearchRequests: Array<{
+      model: string;
+      fieldName: string;
+      id: string | null;
+    }> = [];
+
+    server.use(
+      http.get<{ model: string; fieldName: string }>(
+        '/content-manager/relations/:model/:fieldName',
+        ({ params, request }) => {
+          const url = new URL(request.url);
+
+          relationSearchRequests.push({
+            model: params.model,
+            fieldName: params.fieldName,
+            id: url.searchParams.get('id'),
+          });
+
+          return HttpResponse.json({
+            results: [],
+            pagination: {
+              page: 1,
+              pageCount: 1,
+              total: 0,
+            },
+          });
+        }
+      )
+    );
+
+    const { user } = renderRTL(
+      <ComponentProvider id={99} level={1} uid="blog.missing-component" type="repeatable">
+        <RelationsInput
+          attribute={{
+            type: 'relation',
+            relation: 'manyToMany',
+            target: 'api::category.category',
+            inversedBy: 'relation_locales',
+            // @ts-expect-error – this is what the API returns
+            targetModel: 'api::category.category',
+            relationType: 'manyToMany',
+          }}
+          label="collection"
+          mainField={{ name: 'name', type: 'string' }}
+          name="variant_selector.default_variants.0.collection"
+          type="relation"
+        />
+      </ComponentProvider>,
+      {
+        renderOptions: {
+          wrapper: ({ children }) => (
+            <Routes>
+              <Route path="/content-manager/:collectionType/:slug/:id" element={children} />
+            </Routes>
+          ),
+        },
+        initialEntries: ['/content-manager/collection-types/api::address.address/12345'],
+      }
+    );
+
+    await user.click(await screen.findByRole('combobox', { name: /collection/ }));
+
+    await waitFor(() => {
+      expect(relationSearchRequests).toContainEqual({
+        model: 'blog.missing-component',
+        fieldName: 'collection',
+        id: '99',
+      });
+    });
+  });
+
+  it('preserves the active locale when opening a non-localized nested relation in full page', async () => {
+    const { user } = renderRelationNavigation({
+      documentId: 'non-localized-intermediate',
+      locale: null,
+      name: 'Non-localized intermediate',
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Non-localized intermediate' }));
+    await user.click(screen.getByRole('button', { name: 'Go to entry' }));
+
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/content-manager/collection-types/api::category.category/non-localized-intermediate?plugins[i18n][locale]=en'
+    );
+  });
+
+  it('uses the related record locale when opening a localized nested relation in full page', async () => {
+    const { user } = renderRelationNavigation({
+      documentId: 'localized-intermediate',
+      locale: 'fr',
+      name: 'Localized intermediate',
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Localized intermediate' }));
+    await user.click(screen.getByRole('button', { name: 'Go to entry' }));
+
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/content-manager/collection-types/api::category.category/localized-intermediate?plugins[i18n][locale]=fr'
+    );
+  });
+
+  describe('Load More', () => {
+    const fieldProps: RelationsFieldProps = {
+      attribute: {
+        type: 'relation',
+        relation: 'manyToMany',
+        target: 'api::category.category',
+        inversedBy: 'relation_locales',
+        // @ts-expect-error – this is what the API returns
+        targetModel: 'api::category.category',
+        relationType: 'manyToMany',
+      },
+      label: 'relations',
+      mainField: { name: 'name', type: 'string' },
+      name: 'relations',
+      type: 'relation',
+    };
+
+    /**
+     * 12 relations served in pages of 5, i.e. a document with more relations
+     * than the field displays by default. Returns the pages requested so far.
+     */
+    const usePaginatedRelations = () => {
+      const requestedPages: number[] = [];
+
+      server.use(
+        http.get('/content-manager/relations/:model/:id/:fieldName', ({ request }) => {
+          const page = Number(new URL(request.url).searchParams.get('page') ?? 1);
+          requestedPages.push(page);
+
+          const ids = Array.from({ length: 12 }, (_, index) => index + 1).slice(
+            (page - 1) * 5,
+            page * 5
+          );
+
+          return HttpResponse.json({
+            results: ids.map((id) => ({
+              id,
+              documentId: `relation-${id}`,
+              locale: 'en',
+              status: 'draft',
+              name: `Relation entity ${id}`,
+            })),
+            pagination: { page, pageCount: 3, pageSize: 5, total: 12 },
+          });
+        })
+      );
+
+      return requestedPages;
+    };
+
+    it('loads the next page of relations', async () => {
+      const requestedPages = usePaginatedRelations();
+      const { user } = render({});
+
+      await screen.findByRole('button', { name: 'Relation entity 1' });
+      expect(screen.queryByRole('button', { name: 'Relation entity 6' })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Load More' }));
+
+      await screen.findByRole('button', { name: 'Relation entity 6' });
+      expect(requestedPages).toEqual([1, 2]);
+    });
+
+    it('requests the page following the shared cache when the same field is mounted again', async () => {
+      const requestedPages = usePaginatedRelations();
+
+      /**
+       * Mounting the same field a second time (e.g. the current document opened again in the
+       * relation modal) requests page 1 and resets the cache shared by both instances.
+       */
+      const Fields = () => {
+        const [isMountedAgain, setIsMountedAgain] = React.useState(false);
+
+        return (
+          <>
+            <RelationsInput {...fieldProps} />
+            <button type="button" onClick={() => setIsMountedAgain(true)}>
+              Mount again
+            </button>
+            {isMountedAgain ? <RelationsInput {...fieldProps} /> : null}
+          </>
+        );
+      };
+
+      const { user } = renderRTL(<Fields />, {
+        renderOptions: {
+          wrapper: ({ children }) => (
+            <Routes>
+              <Route path="/content-manager/:collectionType/:slug/:id" element={children} />
+            </Routes>
+          ),
+        },
+        initialEntries: ['/content-manager/collection-types/api::address.address/12345'],
+      });
+
+      await user.click(await screen.findByRole('button', { name: 'Load More' }));
+      await screen.findByRole('button', { name: 'Relation entity 6' });
+
+      await user.click(screen.getByRole('button', { name: 'Mount again' }));
+      await waitFor(() => {
+        expect(screen.queryByRole('button', { name: 'Relation entity 6' })).not.toBeInTheDocument();
+      });
+
+      // Load More on the first instance must request page 2 again, not page 3
+      await user.click(screen.getAllByRole('button', { name: 'Load More' })[0]);
+
+      expect(await screen.findAllByRole('button', { name: 'Relation entity 6' })).toHaveLength(2);
+      expect(requestedPages).not.toContain(3);
+      expect(requestedPages.at(-1)).toBe(2);
+    });
+  });
+
+  describe.skip('Accessibility', () => {
+    it('should have have description text', async () => {
+      render();
+
+      await waitFor(() => {
+        expect(screen.getByText('Press spacebar to grab and re-order')).toBeInTheDocument();
+      });
+    });
+
+    it('should update the live text when an item has been grabbed', async () => {
+      render();
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Drag')).toHaveLength(3);
+      });
+
+      const [draggedItem] = screen.getAllByText('Drag');
+
+      fireEvent.keyDown(draggedItem, { key: ' ', code: 'Space' });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            /Press up and down arrow to change position, Spacebar to drop, Escape to cancel/
+          )
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('should change the live text when an item has been moved', async () => {
+      render();
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Drag')).toHaveLength(3);
+      });
+
+      const [draggedItem] = screen.getAllByText('Drag');
+
+      fireEvent.keyDown(draggedItem, { key: ' ', code: 'Space' });
+      fireEvent.keyDown(draggedItem, { key: 'ArrowDown', code: 'ArrowDown' });
+
+      await waitFor(() => {
+        expect(screen.getByText(/New position in list/)).toBeInTheDocument();
+      });
+    });
+
+    it('should change the live text when an item has been dropped', async () => {
+      render();
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Drag')).toHaveLength(3);
+      });
+
+      const [draggedItem] = screen.getAllByText('Drag');
+
+      fireEvent.keyDown(draggedItem, { key: ' ', code: 'Space' });
+      fireEvent.keyDown(draggedItem, { key: 'ArrowDown', code: 'ArrowDown' });
+      fireEvent.keyDown(draggedItem, { key: ' ', code: 'Space' });
+
+      await waitFor(() => {
+        expect(screen.getByText(/Final position in list/)).toBeInTheDocument();
+      });
+    });
+
+    it('should change the live text after the reordering interaction has been cancelled', async () => {
+      render();
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Drag')).toHaveLength(3);
+      });
+
+      const [draggedItem] = screen.getAllByText('Drag');
+
+      fireEvent.keyDown(draggedItem, { key: ' ', code: 'Space' });
+      fireEvent.keyDown(draggedItem, { key: 'Escape', code: 'Escape' });
+
+      await waitFor(() => {
+        expect(screen.getByText(/Re-order cancelled/)).toBeInTheDocument();
+      });
+    });
+  });
+});

@@ -1,0 +1,82 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: '[CE] e2e (browser: chromium)'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Monorepo install
+        uses: ./.github/actions/yarn-nm-install
+
+      - name: Install Playwright Browsers
+        run: node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Monorepo build
+        uses: ./.github/actions/run-build
+
+      - name: Run [CE] e2e tests
+        env:
+          STRAPI_E2E_EDITION: ce
+          STRAPI_FEATURES_UNSTABLE_PREVIEW_SIDE_EDITOR: true
+        run: |
+          status=0
+          yarn test:e2e --setup --concurrency=1 --domains content-manager -- --project=chromium || status=1
+          yarn test:e2e --setup --concurrency=1 --domains i18n -- --project=chromium || status=1
+          exit $status
+
+      - name: Merge the domains' JSON reports
+        if: ${{ !cancelled() }}
+        run: |
+          node -e '
+          const fs = require("fs");
+          const out = { config: null, suites: [], errors: [] };
+          for (const domain of ["content-manager", "i18n"]) {
+            const file = `test-results-${domain}.json`;
+            if (!fs.existsSync(file)) continue;
+            const report = JSON.parse(fs.readFileSync(file, "utf8"));
+            const prefix = (suite) => {
+              if (suite.file) {
+                if (suite.title === suite.file) suite.title = `${domain}/${suite.title}`;
+                suite.file = `${domain}/${suite.file}`;
+              }
+              for (const spec of suite.specs || []) spec.file = `${domain}/${spec.file}`;
+              (suite.suites || []).forEach(prefix);
+            };
+            report.suites.forEach(prefix);
+            out.config = out.config || report.config;
+            out.suites.push(...report.suites);
+            out.errors.push(...(report.errors || []));
+          }
+          fs.writeFileSync("test-results.json", JSON.stringify(out));
+          '
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            test-apps/e2e/html-report/
+            test-apps/e2e/test-results/
+            test-results*.json
+          retention-days: 30
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.json
+          retention-days: 30

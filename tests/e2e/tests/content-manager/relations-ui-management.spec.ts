@@ -133,14 +133,18 @@ test.describe('Relations UI - manage relations to existing entries', { tag: ['@e
     await openArticle(page);
     await expect(page.getByRole('button', { name: SEEDED_AUTHOR })).toBeVisible();
 
-    await connectAuthor(page, ADDED_AUTHOR);
+    const authors = page.getByRole('combobox', { name: 'authors' });
+    await authors.click();
+    await authors.fill('Ted');
+    await page.getByRole('option', { name: ADDED_AUTHOR }).click();
     await expect(page.getByRole('button', { name: ADDED_AUTHOR })).toBeVisible();
     await page.waitForTimeout(2000);
 
-    await page.getByRole('combobox', { name: 'authors' }).click();
+    await authors.click();
     const remainingAuthor = page.getByRole('option', { name: 'Led Tasso' });
     const noRelations = page.getByText('No relations available');
-    await expect(remainingAuthor.or(noRelations)).toBeVisible();
+    await expect(remainingAuthor.or(noRelations).first()).toBeVisible();
+    await page.waitForTimeout(100);
     expect(await noRelations.isVisible()).toBe(false);
     expect(await remainingAuthor.isVisible()).toBe(true);
   });
